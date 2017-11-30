@@ -1,0 +1,130 @@
+---
+title: "Look for genes with variants in multiple families"
+author: "EF"
+date: "04 Aug 2017"
+output: html_document
+---
+# start_section
+  
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+graphics.off()
+
+# Set root working folder
+library(knitr)
+library(dplyr)
+library(stringr)
+
+opts_knit$set(root.dir = "/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+setwd("/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+
+```
+
+#Load image from s01
+```{r load image}
+
+load("R_data/s02_gast_Aug17_relax_v2_EVE_20170804.Rdata")
+
+#Check dimensions
+dim(gt)
+dim(vv)
+
+sum(row.names(gt) != row.names(vv)) 
+
+```
+
+#Load extra files
+```{r files}
+#Load rename file
+rename <- read.table("R_data/rename.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+#Load cc file
+cc <- read.table("R_data/gast_17_cc_v3.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+```
+
+
+#Rename samples for consistancy
+```{r rename}
+cols <- str_replace_all(colnames(gt), pattern = ".GT", "")
+
+#Order old names and check consistancy
+rename <- rename[order(rename$Old),]
+
+sum(rename$Old != cols)
+
+#Rename
+gt.rn <- gt
+
+colnames(gt.rn) <- rename$New
+
+#Manually check names
+data.frame(old_cols = colnames(gt), new_cols = colnames(gt.rn)) #all names correct
+
+rm(gt, rename)
+
+```
+
+#Cases and control counts
+```{r cc counts}
+case <- cc[cc$CC == 1,]$Sample
+cont <- cc[cc$CC == 0,]$Sample
+
+#Number of cases and controls
+length(case) #29
+length(cont) #13
+
+#Create AC column
+vv$case_AC <- rowSums(gt.rn[,colnames(gt.rn) %in% case], na.rm=TRUE)
+vv$cont_AC <- rowSums(gt.rn[,colnames(gt.rn) %in% cont], na.rm = TRUE)
+
+#Create AN column
+vv$case_AN <- apply(gt.rn[,colnames(gt.rn) %in% case], MARGIN=1, FUN= function(x) length(x[!is.na(x)])*2 )
+vv$cont_AN <- apply(gt.rn[,colnames(gt.rn) %in% cont], MARGIN=1, FUN= function(x) length(x[!is.na(x)])*2 )
+
+#Create AF columns
+vv$case_AF <- vv$case_AC/vv$case_AN
+vv$cont_AF <- vv$cont_AC/vv$cont_AN
+
+rm(cols)
+
+#Image to use in all later analysis
+save.image("R_data/s03_gast_Aug17_relax_v2_20170804.Rdata")
+
+```
+
+#Save all file
+```{r all}
+#Select variants where case af > cont af
+
+vv.cc <- vv[vv$case_AC >= vv$cont_AC,]
+
+#Add vperg
+aggr <- vv.cc %>% group_by(SYMBOL) %>% as.data.frame(mutate(VperG = length(SYMBOL)))
+row.names(aggr) <- row.names(vv.cc)
+
+gt.cc <- gt.rn[row.names(gt.rn) %in% row.names(aggr),]
+
+sum(row.names(gt.cc) != row.names(aggr)) 
+
+merge <- cbind(aggr, gt.cc)
+
+write.csv(merge, "gast_Aug17_relax_filtered_v2_EVE_20170804.csv")
+```
+
+#Final number of variants and genes
+```{r summarise}
+dim(merge)
+
+#number of variants
+nrow(merge)
+
+#number of genes
+length(unique(merge$SYMBOL))
+
+```
+

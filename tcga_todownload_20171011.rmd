@@ -1,0 +1,73 @@
+---
+title: "variable_genes"
+author: "EF"
+date: "07 June 2016"
+output: html_document
+---
+# start_section
+  
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+graphics.off()
+
+# Set root working folder
+library(knitr)
+library(dplyr)
+library(stringr)
+
+opts_knit$set(root.dir = "/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+setwd("/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+
+```
+
+#Load index file
+```{r index}
+index <- read.table("R_data/TCGA_STAD_Patient_Table_20140207.csv", sep = ",", header=TRUE, stringsAsFactors = FALSE)
+manifest <- read.table("R_data/gdc_manifest.2017-10-11T10-01-56.794125.txt", sep="\t", header=TRUE, stringsAsFactors = FALSE)
+```
+
+#Select diffuse
+```{r select}
+
+#Select diffuse samples
+diff <- filter(index,Lauren.Class == "Diffuse" | Lauren.Class == "Mixed")$TCGA.barcode
+
+diff.manifest <- manifest[grepl(paste(diff, collapse='|'), manifest$filename),]
+```
+
+#Seperate out sample types
+```{r sample type}
+
+#Split out sample type from barcode
+diff.manifest$type.n <- sapply(str_split(diff.manifest$filename, "-", 7), `[`, 4) %>% str_replace_all("A", "") %>% as.numeric
+
+#Label sample type based on code for future reference
+diff.manifest$type[diff.manifest$type.n > 0 & diff.manifest$type.n < 10] <- "tumour"
+diff.manifest$type[diff.manifest$type.n > 9 & diff.manifest$type.n < 20] <- "germline"
+diff.manifest$type[diff.manifest$type.n > 19 & diff.manifest$type.n < 30] <- "control"
+
+#Select diffuse, blood germline samples with type.n code of 10
+manifest.gm <-  manifest[grepl(paste(diff, collapse='|'), manifest$filename) & grepl("-10A-", manifest$filename),]
+
+#create list of blood germline samples
+gm.samples <- sapply(str_split(manifest.gm$filename, "-", 7), `[`, 3)
+
+#create list of diffuse samples that dont have germline blood
+missing <- diff[!grepl(paste(gm.samples, collapse='|'), diff)]
+
+#select diffuse samples that dont have blood germline but have solid germline
+manifest.missing <- manifest[grepl(paste(missing, collapse='|'), manifest$filename) & grepl(paste(diff, collapse='|'), manifest$filename) & grepl("-11A-", manifest$filename),]
+
+#create manifest file
+full <- rbind(manifest.gm, manifest.missing)
+
+
+#write manifest
+write.table(full, "TCGA_DGC_manifest_20171011.txt", row.names = FALSE, quote=FALSE, sep = '\t')
+```
+

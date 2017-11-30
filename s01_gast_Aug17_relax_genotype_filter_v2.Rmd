@@ -1,0 +1,147 @@
+---
+title: "Open gast_Aug17 set and filter genotypes"
+author: "EF"
+date: "04 Aug 2017"
+output: html_document
+---
+# start_section
+  
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+graphics.off()
+
+# Set root working folder
+library(knitr)
+library(dplyr)
+library(stringr)
+
+opts_knit$set(root.dir = "/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17/")
+#setwd("/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17/")
+
+```
+
+#Load data
+```{r load}
+
+
+vv <- read.table("Source_data/gast_Aug17_relaxed_vqsr_std_sma_ann_VV.txt", sep = "\t", header = TRUE, row.names = 1, stringsAsFactors = FALSE)
+
+gt <- read.table("Source_data/gast_Aug17_relaxed_vqsr_std_sma_ann_GT_add.txt", sep = "\t", header = TRUE, row.names = 1, stringsAsFactors = FALSE)
+
+dp <- read.table("Source_data/gast_Aug17_relaxed_vqsr_std_sma_ann_DP.txt", sep = "\t", header = TRUE, row.names = 1, stringsAsFactors = FALSE)
+
+gq <- read.table("Source_data/gast_Aug17_relaxed_vqsr_std_sma_ann_GQ.txt", sep = "\t", header = TRUE, row.names = 1, stringsAsFactors = FALSE)
+
+exac <- read.table("Source_data/gast_Aug17_relaxed_vqsr_std_sma_ann_exac.txt", sep = "\t", header = TRUE, row.names = 1, stringsAsFactors = FALSE)
+
+kgen <- read.table("Source_data/gast_Aug17_relaxed_vqsr_std_sma_ann_kgen.txt", sep = "\t", header = TRUE, row.names = 1, stringsAsFactors = FALSE)
+```
+
+#Convert to matrix
+```{r matrix}
+#Convert to matrix
+vv.mx <- as.matrix(vv)
+
+gt.mx <- as.matrix(gt)
+
+rm(vv, gt)
+
+#check dimensions before filtering
+dim(vv.mx)
+
+dim(gt.mx)
+```
+
+
+#Filtering notes
+Filters consistent with filtering applied to WC1K. Call rate filter was lowered to < 0.6 as the dataset is much smaller than WC1K and easier to look through manually, plus there may be families with data not missing that is still useful, consider removing this filter completely.
+The filters are applied in the following order, filtering out:  
+gq < 20  
+dp > 500  
+call_rate < 0.5
+
+#Filter on gq
+```{r gq filter}
+
+#convert to matrix
+gq.mx <- as.matrix(gq)
+
+# num of genotypes to be removed
+sum(gq.mx < 20, na.rm=TRUE) #346070
+
+# Fraction of genotypes to be removed
+sum(gq.mx < 20, na.rm=TRUE)/sum(!is.na(gq.mx)) # ~6.7%
+
+# Apply filter (to gt only !), can only run on matrices
+NA -> gt.mx[ gq.mx < 20 ]
+
+rm(gq, gq.mx)
+```
+
+#Filter on dp
+```{r dp filter}
+#convert to matrix
+dp.mx <- as.matrix(dp)
+
+# num of genotypes to be removed
+sum(dp.mx > 500, na.rm=TRUE) #3776
+
+# Fraction of genotypes to be removed
+sum(dp.mx > 500, na.rm=TRUE)/sum(!is.na(dp.mx)) # ~0.0007%
+
+# Apply filter (to gt only !), can only run on matrices
+NA -> gt.mx[ dp.mx > 500 ]
+
+rm(dp, dp.mx)
+```
+
+#Filter on call rate
+```{r callrate filter}
+
+#Create callrates
+cr <- data.frame(RawVarID=row.names(gt.mx), callrate = NA)
+cr$callrate <- apply(gt.mx, 1, function(x) sum(!is.na(x))/ncol(gt.mx))  
+
+# num of genotypes to be removed
+sum(cr$callrate < 0.5) #3620
+
+# Fraction of genotypes to be removed
+sum(cr$callrate < 0.5, na.rm=TRUE)/sum(nrow(cr)) # ~2.9%
+
+#Filter variants from cr
+
+cr.filt <- cr[cr$callrate >= 0.5,]
+
+# Remove variants from gt, vv, exac and kgen
+gt.filt <- gt.mx[row.names(gt.mx) %in% cr.filt$RawVarID,]
+
+vv.filt <- vv.mx[row.names(vv.mx) %in% cr.filt$RawVarID,]
+
+exac.filt <- exac[row.names(exac) %in% cr.filt$RawVarID,]
+
+kgen.filt <- kgen[row.names(kgen) %in% cr.filt$RawVarID,]
+
+rm(cr, cr.filt, gt.mx, vv.mx, exac, kgen)
+```
+
+#Check rownames
+```{r check rownames}
+
+sum(row.names(gt.filt) != row.names(vv.filt)) 
+
+sum(row.names(gt.filt) != row.names(exac.filt))
+
+sum(row.names(gt.filt) != row.names(kgen.filt))
+
+```
+
+#Write data
+```{r write}
+save.image("R_data/s01_gast_Aug17_relax_v2_20170804.Rdata")
+```
+

@@ -1,0 +1,158 @@
+---
+title: "Filter variants on consequence and rarity"
+author: "EF"
+date: "04 Aug 2017"
+output: html_document
+---
+# start_section
+  
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+graphics.off()
+
+# Set root working folder
+library(knitr)
+library(dplyr)
+library(stringr)
+library(sqldf)
+
+opts_knit$set(root.dir = "/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17/")
+setwd("/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17/")
+
+```
+
+#Load image from s01
+```{r load image}
+
+load("R_data/s01_gast_Aug17_relax_v2_20170804.Rdata")
+
+#Check dimensions
+dim(gt.filt)
+dim(vv.filt)
+dim(exac.filt)
+dim(kgen.filt)
+
+sum(row.names(gt.filt) != row.names(vv.filt)) 
+sum(row.names(gt.filt) != row.names(exac.filt))
+sum(row.names(gt.filt) != row.names(kgen.filt))
+
+#coerce gt and vv to dataframes
+gt.df <- as.data.frame(gt.filt)
+vv.df <- as.data.frame(vv.filt)
+
+#Check row names have not changed
+sum(row.names(gt.filt) != row.names(gt.df)) 
+sum(row.names(vv.filt) != row.names(vv.df))
+
+#Clean up
+rm(gt.filt)
+```
+
+
+#Add EVE files
+```{r EVE}
+#Add columnn with rownames to vv
+vv.df$row <- row.names(vv.df)
+
+#Load eve files
+eve.gene <- read.table("/scratch/medgen/users/eleanor/2015-16/1kgenomes_analysis/variability_output/variability_thresholds_combinedscore_geneann_nonsyn_populations_v2_20160716.csv", header=TRUE, sep=",")
+
+#Add select columns from eve gene score
+short.eveg <- subset(eve.gene, select= c("SYMBOL", "COMBINED_SCORE", "Cscore", "COMBINED_SCORE_EUR", "Cscore_EUR" ))
+
+colnames(short.eveg) <- c("SYMBOL", "EVE_COMBINED_SCORE", "EVE_Cscore", "EVE_COMBINED_SCORE_EUR", "EVE_Cscore_EUR")
+
+vvg <- merge(vv.df, short.eveg, by="SYMBOL", all.x = TRUE)
+
+row.names(vvg) <- vvg$row
+
+vv.df <- vvg[order(row.names(vvg)),]
+
+rm(eve.gene, short.eveg, vvg, vv.filt)
+```
+
+#Add exac and kgen frequencies to vv file
+```{r exac kgen}
+
+sum(row.names(kgen.filt) != row.names(vv.df))
+sum(row.names(exac.filt) != row.names(vv.df))
+
+#Add kgen AFs
+vv.df$kgen.AF <- kgen.filt$kgen.AF
+vv.df$kgen.EUR_AF <- kgen.filt$kgen.EUR_AF
+
+#Add exac AFs
+vv.df$exac_non_TCGA.AF <- exac.filt$exac_non_TCGA.AF
+vv.df$exac_non_TCGA_EUR.AF <- exac.filt$exac_non_TCGA.AC_NFE/exac.filt$exac_non_TCGA.AN_NFE
+
+```
+
+
+#Filter vv on consequence
+```{r vv filter consequence}
+
+#Number of variants before filtering on consequence
+nrow(vv.df)
+
+#Filter on consequence
+high <- vv.df[vv.df$IMPACT == "HIGH",]
+miss <- vv.df[vv.df$IMPACT == "MODERATE",]
+del <- miss[(grepl("deleterious", miss$SIFT_call) & grepl("probably_damaging", miss$PolyPhen_call)) |
+              (is.na(miss$SIFT_call) & grepl("probably_damaging", miss$PolyPhen_call)) |
+              (grepl("deleterious", miss$SIFT_call) & is.na(miss$PolyPhen_call)) |
+              grepl("inframe", miss$Consequence),]
+high_del <- rbind(high, del)
+
+#Number of variants after filtering on consequence
+nrow(high_del)
+
+#Clean up
+rm(vv.df, miss, high, del)
+```
+
+#Filter on rarity
+```{r vv filter kgen}
+#Create vector of common variants in EUR_Kgen
+kgen_com <- row.names(kgen.filt[kgen.filt$kgen.EUR_AF > 0.05,])
+
+#Number of varaints to remove
+length(kgen_com)
+
+#Select variants not in this vector
+vv <- high_del[!row.names(high_del) %in% kgen_com,]
+
+#Number of variants remaining after consequence and rare filters
+nrow(vv)
+
+#Sort vv on rownames
+vv <- vv[order(row.names(vv)),]
+
+#Clean up
+rm(high_del, kgen_com, kgen.filt, exac.filt)
+```
+
+#Select filtered variants in gt
+```{r gt filter}
+#Select variants in gt that passed filters
+gt <- gt.df[row.names(gt.df) %in% row.names(vv),]
+
+#Check rownames
+dim(gt)
+dim(vv)
+
+sum(row.names(gt) != row.names(vv)) 
+
+#Clean up
+rm(gt.df)
+```
+
+#Save data
+```{r save}
+save.image("R_data/s02_gast_Aug17_relax_v2_EVE_20170804.Rdata")
+```
+

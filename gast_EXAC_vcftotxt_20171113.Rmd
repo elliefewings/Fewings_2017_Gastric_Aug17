@@ -1,0 +1,70 @@
+---
+title: "Look for genes with variants in multiple families"
+author: "EF"
+date: "04 Aug 2017"
+output: html_document
+---
+# start_section
+  
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+graphics.off()
+
+# Set root working folder
+library(knitr)
+library(dplyr)
+library(stringr)
+library(vcfR)
+library(tidyr)
+
+opts_knit$set(root.dir = "/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+setwd("/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+
+```
+
+#load vcf without header
+```{r load vcf}
+
+vcf <- read.vcfR("/scratch/medgen/users/eleanor/2015-16/IHCAP/gast_Aug17/ExAC_nonTCGA.r0.3.1.sites.vep.filt.split_brca2palb2.recode.vcf")
+
+vcf.info <- extract_info_tidy(vcf, info_fields = NULL, info_types = TRUE, info_sep = ";")
+
+vcf.all <- as.data.frame(vcfR2tidy(vcf, info_only = TRUE)$fix)
+
+
+```
+
+#Filter dataframe
+```{r filter}
+
+vcf.nona <- Filter(function(x)!all(is.na(x)), vcf.all)
+
+vcf.multi <- filter(vcf.nona, is.na(AC))
+
+vcf.mono <- filter(vcf.nona, !is.na(AC))
+
+cols <- c("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "AC", "AC_AFR", "AC_AMR", "AC_Adj", "AC_EAS", "AC_FEMALE", "AC_FIN", "AC_Het", "AC_Hom", "AC_MALE", "AC_NFE", "AC_OTH", "AC_SAS", "AF", "AN", "AN_AFR", "AN_AMR", "AN_Adj", "AN_EAS", "AN_FEMALE", "AN_FIN", "AN_MALE", "AN_NFE", "AN_OTH", "AN_SAS", "BaseQRankSum", "Het_AFR", "Het_AMR", "Het_EAS", "Het_FIN", "Het_NFE", "Het_OTH", "Het_SAS", "Hom_AFR", "Hom_AMR", "Hom_EAS", "Hom_FIN", "Hom_NFE", "Hom_OTH", "Hom_SAS")
+
+vcf.exac <- vcf.mono %>% subset(select=cols)
+
+```
+
+```{r}
+
+csq <- data.frame(CHROM=vcf.mono$CHROM, POS=vcf.mono$POS, CSQ=vcf.mono$CSQ)
+
+csq.sep <- separate(csq, CSQ, c("ALLELE", "CONSEQUENCE", "IMPACT", "SYMBOL"), sep="\\|", extra="drop")
+
+sum(csq.sep$POS != vcf.exac$POS)
+
+exac <- merge(csq.sep, vcf.exac, by=c("CHROM", "POS"))
+
+
+write.csv(exac, "exac_brca2_palb2_vv_20171113.csv")
+```
+
