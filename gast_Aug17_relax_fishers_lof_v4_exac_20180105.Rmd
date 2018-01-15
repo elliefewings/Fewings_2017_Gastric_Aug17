@@ -1,0 +1,192 @@
+---
+title: "Look for genes with variants in multiple families"
+author: "EF"
+date: "14 Nov 2017"
+output: html_document
+---
+# start_section
+  
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+graphics.off()
+
+# Set root working folder
+library(knitr)
+library(dplyr)
+library(stringr)
+library(kableExtra)
+
+options(scipen=999)
+options(knitr.table.format = "html") 
+
+opts_knit$set(root.dir = "/rds/project/erf33/rds-erf33-medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+setwd("/rds/project/erf33/rds-erf33-medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+
+```
+
+#Load image from s01
+```{r load image}
+
+load("R_data/s03_gast_Aug17_relax_v2_20170804.Rdata")
+
+#Check dimensions
+dim(gt.rn)
+dim(vv)
+
+sum(row.names(gt.rn) != row.names(vv)) 
+
+#Load exac data
+exac <- read.table("/rds/project/erf33/rds-erf33-medgen/users/eleanor/2015-16/IHCAP/gast_Aug17/exac_brca2_palb2_vv_20171113.csv", sep = ",", header = TRUE, stringsAsFactors = FALSE)
+
+#Load 1000 genomes data
+kgen <- read.table("/rds/project/erf33/rds-erf33-medgen/users/eleanor/2015-16/1kgenomes_analysis/1000genomes_variantfilter_EUR_20170330.csv", sep = ",", header = TRUE, stringsAsFactors = FALSE)
+```
+
+#Create aggregated allele frequencies in exac
+```{r exac af}
+exac_lof <- exac[exac$IMPACT == "HIGH",]
+
+exac_short <- subset(exac_lof, select=c("SYMBOL", "AC_NFE", "AN_NFE"))
+
+#Count without var
+aggr_exac <- exac_short %>% group_by(SYMBOL) %>% mutate(exac_AC=sum(AC_NFE, na.rm=TRUE), exac_AN=max(AN_NFE, na.rm=TRUE))
+
+aggr_exac$exac_without_AC <- aggr_exac$exac_AN - aggr_exac$exac_AC
+
+exac.c <- unique(select(aggr_exac, -AC_NFE, -AN_NFE, -exac_AN))
+
+rm(exac, exac_short, aggr_exac, exac_lof)
+```
+
+#Create aggregated allele frequencies in kgen
+```{r kgen af}
+kgen_lof <- kgen[kgen$IMPACT == "HIGH",]
+
+kgen_short <- subset(kgen_lof, select=c("SYMBOL", "EUR_AF"))
+
+#calculate ACs from AF and AN
+kgen_short$AN <- 503*2 #(503 Europeans in kgen phase 3)
+kgen_short$kgen_AC <- round(kgen_short$EUR_AF*kgen_short$AN)
+
+#Count without var
+aggr_kgen <- kgen_short %>% group_by(SYMBOL) %>% mutate(kgen_AC=sum(kgen_AC, na.rm=TRUE))
+
+aggr_kgen$kgen_without_AC <- aggr_kgen$AN - aggr_kgen$kgen_AC
+
+kgen.c <- unique(select(aggr_kgen, -EUR_AF, -AN))
+
+rm(kgen, kgen_short, aggr_kgen, kgen_lof)
+```
+
+
+#Create aggregated allele frequences in gastric data
+```{r gast af}
+vv_lof <- vv[vv$IMPACT == "HIGH" & vv$case_AC > 0,]
+
+vv_short <- subset(vv_lof, select=c("SYMBOL", "case_AC", "case_AN"))
+
+aggr_vv <- vv_short %>% group_by(SYMBOL) %>% mutate(case_AC=sum(case_AC, na.rm=TRUE), case_AN=round(mean(case_AN, na.rm=TRUE)))
+
+aggr_vv$case_without_AC <- aggr_vv$case_AN - aggr_vv$case_AC
+
+vv.c <- unique(select(aggr_vv, -case_AN))
+
+rm(vv, aggr_vv, cc, gt.rn, vv_short, case, cont, vv_lof)
+```
+
+
+#merge ACs from both sets
+```{r merge}
+
+vv.bp <- filter(vv.c, SYMBOL == "BRCA2" | SYMBOL == "PALB2")
+
+sum(vv.bp$SYMBOL != exac.c$SYMBOL)
+
+all <- cbind(vv.bp, exac.c)
+
+all.df <- subset(all, select=c("SYMBOL", "case_AC", "exac_AC", "case_without_AC", "exac_without_AC"))
+
+rm(all, vv.c, vv.bp)
+```
+
+#Fishers exact
+```{r FE}
+
+all.df$pval <- all.df %>% apply(1, function(x){
+  fishtable <- matrix(as.numeric(c(x[2:5])), nrow = 2, byrow=TRUE)
+  fisher.test(fishtable)[[1]]
+})
+
+all.df$bonf.p <- p.adjust(all.df$pval, method="bonferroni", n=nrow(all.df)) 
+
+all.df
+
+```
+
+#Create fe matrices
+```{r matrices}
+fe <- data.frame(Set=c("count_exac_brca2","count_kgen_brca2", "count_exac_palb2", "count_kgen_palb2"), case_AC=c(1, 1, 5, 5), control_AC=c(51, 11, 1, 1), case_without_AC=c(657, 657, 653, 653), control_without_AC=c(54295, 995, 54345, 1005))
+  
+kgen.fe <- fe[grepl("kgen", fe$Set),]
+
+exac.fe <- fe[grepl("exac", fe$Set),]
+
+fe$pval <- fe %>% apply(1, function(x){
+  fishtable <- matrix(as.numeric(c(x[2:5])), nrow = 2, byrow=TRUE)
+  fisher.test(fishtable, alternative = "greater")[[1]]
+})
+
+exac.fe$pval <- exac.fe %>% apply(1, function(x){
+  fishtable <- matrix(as.numeric(c(x[2:5])), nrow = 2, byrow=TRUE)
+  fisher.test(fishtable, alternative = "greater")[[1]]
+})
+
+kgen.fe$pval <- kgen.fe %>% apply(1, function(x){
+  fishtable <- matrix(as.numeric(c(x[2:5])), nrow = 2, byrow=TRUE)
+  fisher.test(fishtable, alternative = "greater")[[1]]
+})
+
+kable(fe, col.names=c("Set", "HDGC with variant", "Control with variant","HDGC without variant", "Control without variant", "P value")) %>% column_spec(1, bold = T) %>%  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+
+#FE over BRCA2 variants
+```{r BRCA2 numbers}
+
+count_exac_brca2 <- matrix(c(1, 51, 657, 54295), nrow=2, byrow=TRUE)
+
+fisher.test(count_exac_brca2, alternative = "greater", or=1)[[1]]
+
+#p.adjust(fisher.test(count_exac_brca2)[[1]], method="fdr", n=2) 
+
+count_kgen_brca2 <- matrix(c(1, 11, 657, 995), nrow=2, byrow=TRUE)
+
+fisher.test(count_kgen_brca2, alternative = "greater")[[1]]
+
+#p.adjust(fisher.test(count_kgen_brca2)[[1]], method="fdr", n=2) 
+
+
+```
+
+#FE over palb2 variants
+```{r palb2 numbers}
+
+count_exac_palb2 <- matrix(c(5, 1, 653, 54345), nrow=2, byrow=TRUE)
+
+fisher.test(count_exac_palb2, alternative = "greater")[[1]]
+
+#p.adjust(fisher.test(count_exac_palb2)[[1]], method="fdr", n=2)
+
+count_kgen_palb2 <- matrix(c(5, 1, 653, 1005), nrow=2, byrow=TRUE)
+
+fisher.test(count_kgen_palb2, alternative = "greater")[[1]]
+
+#p.adjust(fisher.test(count_kgen_palb2)[[1]], method="fdr", n=2)
+
+```
+

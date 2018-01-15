@@ -1,0 +1,298 @@
+---
+title: "Look for genes with variants in multiple families"
+author: "EF"
+date: "04 Jan 2018"
+output: html_document
+---
+# start_section
+  
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+graphics.off()
+
+# Set root working folder
+library(knitr)
+library(dplyr)
+library(stringr)
+library(kableExtra)
+
+options(scipen=999)
+options(knitr.table.format = "html") 
+
+opts_knit$set(root.dir = "/rds/project/erf33/rds-erf33-medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+setwd("/rds/project/erf33/rds-erf33-medgen/users/eleanor/2015-16/IHCAP/gast_Aug17")
+
+```
+
+#Load image from s01
+```{r load image}
+#Load data
+load("R_data/s03_gast_Aug17_relax_v2_20170804.Rdata")
+
+#Add leading zeros to family names to make unique
+cc$Family <- ifelse(cc$Family < 10, paste("0", cc$Family, sep=""), cc$Family)
+
+#Check dimensions
+dim(gt.rn)
+dim(vv)
+
+#Check rows
+sum(row.names(gt.rn) != row.names(vv)) 
+
+#Remove GST_340_302 from gt and from cases
+case <- case[case != "GST_340_302"]
+
+#Only select variants that are in cases greater or equal to controls
+vv.cc <- vv[vv$case_AC > 0,]
+gt.cc <- gt.rn[row.names(gt.rn) %in% row.names(vv.cc),]
+
+#Number of variants
+nrow(vv.cc)
+
+#Number of genes
+length(unique(vv.cc$SYMBOL))
+
+#Add VperG column
+vv <- vv.cc %>% group_by(SYMBOL) %>% mutate(VperG = length(SYMBOL))
+
+#Load 1000 genomes data
+kgen.df <- read.table("/rds/project/erf33/rds-erf33-medgen/users/eleanor/2015-16/1kgenomes_analysis/1000genomes_variantfilter_EUR_20170330.csv", sep = ",", header = TRUE, stringsAsFactors = FALSE)
+
+#Add VperG column
+kgen <- kgen.df %>% group_by(SYMBOL) %>% mutate(VperG = length(SYMBOL))
+
+rm(kgen.df, vv.cc)
+
+```
+
+#Aggregate genotypes into one per family
+```{r family}
+#Select cases and create unique family names to grep on
+gt.case <- gt.cc[,colnames(gt.cc) %in% case]
+
+#Make unique family names
+cc$Family2 <- make.unique(paste("Family",cc$Family, sep="" ))
+
+#Select family info for cases
+cc.case <- cc[cc$Sample %in% case,]
+
+#Order genotype information to match familial cc info
+gt.sort <- subset(gt.case, select=cc.case$Sample)
+
+#Convert missings to -9, NA causes errors in finding max value
+gt.sort[is.na(gt.sort)] <- -9
+
+#Check if cc is in same order as genotypes
+sum(cc.case$Sample != colnames(gt.sort))
+
+#Add family names to gt header
+colnames(gt.sort) <- cc.case$Family2
+
+#Create empty df of rawvarids
+gt.fam <- data.frame(rows=row.names(gt.sort))
+
+#Set new colnames gt
+#Fill with max AC per family
+for (f in unique(paste("Family",cc.case$Family, sep="" ))){
+  fam <- as.data.frame(gt.sort[,grepl(f, colnames(gt.sort))])
+  var <- apply(fam, 1, function(x) max(x, na.rm=TRUE))
+  gt.fam <- cbind(gt.fam, var)
+}
+
+#Add family numbers to df
+colnames(gt.fam) <- c("row", unique(paste("Family",cc.case$Family, sep="" )))
+
+#Remove column of row names
+gt <- select(gt.fam, -row)
+
+#Convert missing values back to NA
+gt[gt == -9] <- NA
+
+#Check consistancy vv
+sum(vv$row != row.names(gt.fam))
+
+#Add case counts and allele numbers to vv
+vv$case_AC <- rowSums(gt, na.rm=TRUE)
+vv$case_AN <- apply(gt, MARGIN=1, FUN= function(x) length(x[!is.na(x)])*2 )
+
+rm(cc.case, fam, var, gt.case, gt.sort, f, gt.fam, gt, gt.cc)
+```
+
+#Create aggregated allele frequencies in kgen
+```{r kgen af}
+#Number of rare protein affecting variants in kgen
+nrow(kgen)
+
+#Number genes in kgen
+length(unique(kgen$SYMBOL))
+       
+#Create vperg table of each gene with one high impact variant
+kgen.high <- kgen[kgen$IMPACT == "HIGH",]
+kgen.vpg <- subset(kgen.high, select=c("SYMBOL", "VperG")) %>% unique(.)
+
+#Find top 1% VpG scores
+m <- round(quantile(kgen.vpg$VperG, 0.99),digits=0)
+
+#Select genes with at least one LoF and not in top 1% variable
+kgen_lof <- kgen[kgen$IMPACT == "HIGH" & kgen$VperG  < m,]
+
+#Number of LoF variants not in top 1% variable
+nrow(kgen_lof)
+
+#Number of genes with at least one LoF and not in top 1% variable
+length(unique(kgen_lof$SYMBOL))
+
+#Select gene names and AFs
+kgen_short <- subset(kgen_lof, select=c("SYMBOL", "EUR_AF"))
+
+#calculate ACs from AF and AN
+kgen_short$AN <- 503*2 #(503 Europeans in kgen phase 3)
+kgen_short$kgen_AC <- round(kgen_short$EUR_AF*kgen_short$AN)
+
+#Aggregate AC per gene
+aggr_kgen <- kgen_short %>% group_by(SYMBOL) %>% mutate(kgen_AC=sum(kgen_AC, na.rm=TRUE))
+
+#Calculate without variant
+aggr_kgen$kgen_without_AC <- aggr_kgen$AN - aggr_kgen$kgen_AC
+
+#Create list of all genes with counts
+kgen.c <- unique(select(aggr_kgen, -EUR_AF, -AN))
+
+rm(kgen, kgen_short, aggr_kgen, kgen_lof, kgen.high, kgen.vpg, m)
+
+```
+
+#Create aggregated allele frequences in gastric data
+```{r gast af}
+
+#Create vperg table of each gene with one high impact variant
+vv.high <- vv[vv$IMPACT == "HIGH",]
+gene.vpg <- subset(vv.high, select=c("SYMBOL", "VperG")) %>% unique(.)
+
+#Find top 1% VpG scores
+n <- round(quantile(gene.vpg$VperG, 0.99),digits=0)
+
+#Count variants and genes after removal of top 1%
+#All variants
+nrow(vv[vv$VperG  < n,])
+
+#LoF variants
+nrow(vv.high[vv.high$VperG  < n,])
+
+#Genes with at least 1 LoF variant
+length(unique(vv.high[vv.high$VperG  < n,]$SYMBOL))
+
+#Create set of LoF variants after removal of top 1%
+vv_lof <- vv[vv$IMPACT == "HIGH" & vv$VperG  < n,]
+
+#Create set of variants in genes with at least 1 LoF after removal of top 1%
+vv_lofm <- vv[vv$SYMBOL %in% vv_lof$SYMBOL,]
+
+#Number of variants in this set
+nrow(vv_lofm)
+
+#Select short subset
+vv_short <- subset(vv_lof, select=c("SYMBOL", "case_AC", "case_AN"))
+
+#Aggregate LoF allele counts into genes
+aggr_vv <- vv_short %>% group_by(SYMBOL) %>% mutate(case_AC=sum(case_AC, na.rm=TRUE), case_AN=round(mean(case_AN, na.rm=TRUE)))
+
+#Create count without variant
+aggr_vv$case_without_AC <- aggr_vv$case_AN - aggr_vv$case_AC
+
+#Tidy
+vv.c <- unique(select(aggr_vv, -case_AN))
+
+#Write file for input into GM cytoscape
+write.csv(vv.c, "gastric_Aug17_genes_cytoscape_20180104.csv")
+
+rm(vv, aggr_vv, cc, vv_short, case, cont, vv.high, gene.vpg, n)
+```
+
+
+#merge ACs from both sets
+```{r merge}
+#Merge allele counts from both sets
+all.c <- as.matrix(merge(vv.c, kgen.c, by="SYMBOL", all = TRUE))
+
+#Set missing ACs to 0
+all.c[is.na(all.c)] <- 0
+all.df <- as.data.frame(all.c)
+
+#convert all factors back to numerics
+all.df$case_AC <- as.numeric(as.character(all.df$case_AC))
+all.df$case_without_AC <- as.numeric(as.character(all.df$case_without_AC))
+
+all.df$kgen_AC <- as.numeric(as.character(all.df$kgen_AC))
+all.df$kgen_without_AC <- as.numeric(as.character(all.df$kgen_without_AC))
+
+#if kgen ac is 0, set without to 1006
+all.df$kgen_without_AC[all.df$kgen_AC == 0] <- 1006
+all.df$kgen_without_AC[all.df$kgen_without_AC < 0] <- 0
+all.df$case_without_AC[all.df$case_without_AC < 0] <- 0
+
+all.df <- subset(all.df, select=c("SYMBOL", "case_AC", "kgen_AC", "case_without_AC", "kgen_without_AC"))
+
+rm(all.c, kgen.c, vv.c)
+```
+
+#Load list of DNAR genes
+```{r dnar}
+#Load gene lists
+dnar <- read.table("panther_DNAR_161_20171030.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+apop <- read.table("panther_apop2_36_20171106.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+#Create files of each GO term
+dnar.ac <- filter(all.df, SYMBOL %in% dnar$Gene)
+apop.ac <- filter(all.df, SYMBOL %in% apop$Gene)
+
+```
+
+#Create dataframe with pathways
+```{r pathways}
+#Create one DF for GO counts
+paths <- data.frame(Term=c("APOP", "DNAR"), case_AC=c(sum(apop.ac$case_AC), sum(dnar.ac$case_AC)), kgen_AC=c(sum(apop.ac$kgen_AC), sum(dnar.ac$kgen_AC)) )
+
+#Reset without ACs
+paths$case_without_AC <- 44 - paths$case_AC
+paths$kgen_without_AC <- 1006 - paths$kgen_AC
+```
+
+#Fishers exact
+```{r FE}
+#Calculate pvalues using two and one sided fishers
+paths$pval <- paths %>% apply(1, function(x){
+  fishtable <- matrix(as.numeric(c(x[2:5])), nrow = 2, byrow=TRUE)
+  fisher.test(fishtable)[[1]]
+})
+
+paths$pval_onesided <- paths %>% apply(1, function(x){
+  fishtable <- matrix(as.numeric(c(x[2:5])), nrow = 2, byrow=TRUE)
+  fisher.test(fishtable, alternative = "greater")[[1]]
+})
+
+paths$FDR.p <- signif(p.adjust(paths$pval, method="fdr", n=nrow(paths)), digits=2)
+
+paths
+
+kable(paths, col.names=c("GO Term", "HDGC with variant", "Control with variant","HDGC without variant", "Control without variant", "P value", "One-sided P value", "FDR P value")) %>% column_spec(1, bold = T) %>%  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+#dnar vv
+```{r dnar vv}
+vv.dnar <- as.data.frame(vv_lof[vv_lof$SYMBOL %in% dnar$Gene,])
+
+gt.dnar <- gt.rn[row.names(gt.rn) %in% vv.dnar$row,]
+
+gt.one <- gt.dnar[,colSums(gt.dnar, na.rm = TRUE) > 0]
+
+comb.dnar <- cbind(vv.dnar, gt.one)
+
+#write.csv(comb.dnar, "gast_Aug17_vv_dnar_GO_v3_20180105.csv")
+
+```
